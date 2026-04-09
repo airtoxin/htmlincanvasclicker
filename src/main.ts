@@ -73,17 +73,67 @@ function resizeCanvas() {
   canvas.style.height = `${window.innerHeight}px`;
 }
 
-(canvas as HTMLCanvasElement & { onpaint: ((this: HTMLCanvasElement) => void) | null }).onpaint = () => {
+type Ripple = { x: number; y: number; born: number; hue: number };
+const ripples: Ripple[] = [];
+const RIPPLE_DURATION = 900;
+
+function paint(now: number) {
   const dpr = window.devicePixelRatio || 1;
   ctx.reset();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (typeof ctx.drawElementImage === "function") {
     const transform = ctx.drawElementImage(app, 0, 0);
     app.style.transform = transform.toString();
-  } else {
-    console.warn("drawElementImage is not available");
   }
+
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+    const age = now - r.born;
+    if (age >= RIPPLE_DURATION) {
+      ripples.splice(i, 1);
+      continue;
+    }
+    const t = age / RIPPLE_DURATION;
+    const radius = 20 + t * 220;
+    const alpha = 1 - t;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `hsla(${r.hue}, 100%, 65%, ${alpha})`;
+    ctx.lineWidth = 4 * (1 - t) + 1;
+    ctx.shadowColor = `hsla(${r.hue}, 100%, 70%, ${alpha})`;
+    ctx.shadowBlur = 24;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, radius * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+(canvas as HTMLCanvasElement & { onpaint: ((this: HTMLCanvasElement) => void) | null }).onpaint = () => {
+  paint(performance.now());
 };
+
+function tick(now: number) {
+  if (ripples.length > 0) paint(now);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+document.querySelector<HTMLButtonElement>("#counter")!.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  ripples.push({
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
+    born: performance.now(),
+    hue: Math.floor(Math.random() * 360),
+  });
+});
 
 resizeCanvas();
 window.addEventListener("resize", resizeCanvas);
