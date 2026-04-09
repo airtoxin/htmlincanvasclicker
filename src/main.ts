@@ -65,6 +65,107 @@ const ctx = canvas.getContext("2d") as CanvasRenderingContext2D & {
 };
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
+type Piece = {
+  r: number;
+  c: number;
+  sx: number;
+  sy: number;
+  dx: number;
+  dy: number;
+  path: Path2D;
+  locked: boolean;
+};
+
+const COLS = 4;
+const ROWS = 3;
+const SNAP_DIST = 22;
+
+let pieceW = 0;
+let pieceH = 0;
+let pieces: Piece[] = [];
+let order: Piece[] = [];
+let dragging: Piece | null = null;
+let grabDX = 0;
+let grabDY = 0;
+
+function buildEdge(
+  path: Path2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  type: number,
+) {
+  if (type === 0) {
+    path.lineTo(x2, y2);
+    return;
+  }
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const L = Math.hypot(dx, dy);
+  // outward perpendicular for clockwise polygon walking
+  const px = (dy / L) * type;
+  const py = (-dx / L) * type;
+  const tabH = L * 0.22;
+  const pt = (t: number, h: number) => ({
+    x: x1 + dx * t + px * h,
+    y: y1 + dy * t + py * h,
+  });
+  const A = pt(0.35, 0);
+  const B = pt(0.18, tabH * 0.7);
+  const C = pt(0.22, tabH * 1.15);
+  const D = pt(0.5, tabH * 1.25);
+  const E = pt(0.78, tabH * 1.15);
+  const F = pt(0.82, tabH * 0.7);
+  const G = pt(0.65, 0);
+  path.lineTo(A.x, A.y);
+  path.bezierCurveTo(B.x, B.y, C.x, C.y, D.x, D.y);
+  path.bezierCurveTo(E.x, E.y, F.x, F.y, G.x, G.y);
+  path.lineTo(x2, y2);
+}
+
+function buildPuzzle() {
+  pieceW = window.innerWidth / COLS;
+  pieceH = window.innerHeight / ROWS;
+  // randomized internal edge tabs (±1 from the upper/left piece's perspective)
+  const hEdge: number[][] = [];
+  const vEdge: number[][] = [];
+  for (let r = 0; r < ROWS - 1; r++) {
+    hEdge.push(
+      Array.from({ length: COLS }, () => (Math.random() < 0.5 ? 1 : -1)),
+    );
+  }
+  for (let r = 0; r < ROWS; r++) {
+    vEdge.push(
+      Array.from({ length: COLS - 1 }, () => (Math.random() < 0.5 ? 1 : -1)),
+    );
+  }
+  pieces = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const top = r === 0 ? 0 : -hEdge[r - 1][c];
+      const bottom = r === ROWS - 1 ? 0 : hEdge[r][c];
+      const left = c === 0 ? 0 : -vEdge[r][c - 1];
+      const right = c === COLS - 1 ? 0 : vEdge[r][c];
+      const sx = c * pieceW;
+      const sy = r * pieceH;
+      const ex = sx + pieceW;
+      const ey = sy + pieceH;
+      const path = new Path2D();
+      path.moveTo(sx, sy);
+      buildEdge(path, sx, sy, ex, sy, top);
+      buildEdge(path, ex, sy, ex, ey, right);
+      buildEdge(path, ex, ey, sx, ey, bottom);
+      buildEdge(path, sx, ey, sx, sy, left);
+      path.closePath();
+      const dx = (Math.random() - 0.5) * window.innerWidth * 0.7;
+      const dy = (Math.random() - 0.5) * window.innerHeight * 0.7;
+      pieces.push({ r, c, sx, sy, dx, dy, path, locked: false });
+    }
+  }
+  order = pieces.slice();
+}
+
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   canvas.width = window.innerWidth * dpr;
@@ -73,67 +174,99 @@ function resizeCanvas() {
   canvas.style.height = `${window.innerHeight}px`;
 }
 
-type Ripple = { x: number; y: number; born: number; hue: number };
-const ripples: Ripple[] = [];
-const RIPPLE_DURATION = 900;
-
-function paint(now: number) {
+function paint() {
   const dpr = window.devicePixelRatio || 1;
   ctx.reset();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (typeof ctx.drawElementImage === "function") {
-    const transform = ctx.drawElementImage(app, 0, 0);
-    app.style.transform = transform.toString();
-  }
+  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
-  for (let i = ripples.length - 1; i >= 0; i--) {
-    const r = ripples[i];
-    const age = now - r.born;
-    if (age >= RIPPLE_DURATION) {
-      ripples.splice(i, 1);
-      continue;
-    }
-    const t = age / RIPPLE_DURATION;
-    const radius = 20 + t * 220;
-    const alpha = 1 - t;
+  if (typeof ctx.drawElementImage !== "function") return;
+
+  // Subtle hint of solved board
+  ctx.save();
+  ctx.globalAlpha = 0.07;
+  ctx.drawElementImage(app, 0, 0);
+  ctx.restore();
+
+  for (const p of order) {
+    ctx.save();
+    ctx.translate(p.dx, p.dy);
+    ctx.beginPath();
+    ctx.clip(p.path);
+    ctx.drawElementImage(app, 0, 0);
+    ctx.restore();
 
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.strokeStyle = `hsla(${r.hue}, 100%, 65%, ${alpha})`;
-    ctx.lineWidth = 4 * (1 - t) + 1;
-    ctx.shadowColor = `hsla(${r.hue}, 100%, 70%, ${alpha})`;
-    ctx.shadowBlur = 24;
-    ctx.beginPath();
-    ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(r.x, r.y, radius * 0.6, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.translate(p.dx, p.dy);
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = p.locked
+      ? "rgba(170, 59, 255, 0.95)"
+      : "rgba(255, 255, 255, 0.85)";
+    ctx.lineWidth = p.locked ? 1.2 : 1.6;
+    ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+    ctx.shadowBlur = p === dragging ? 18 : 6;
+    ctx.stroke(p.path);
     ctx.restore();
   }
 }
 
-(canvas as HTMLCanvasElement & { onpaint: ((this: HTMLCanvasElement) => void) | null }).onpaint = () => {
-  paint(performance.now());
-};
-
-function tick(now: number) {
-  if (ripples.length > 0) paint(now);
+function tick() {
+  paint();
   requestAnimationFrame(tick);
 }
-requestAnimationFrame(tick);
 
-document.querySelector<HTMLButtonElement>("#counter")!.addEventListener("click", (e) => {
+function pickPiece(x: number, y: number): Piece | null {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  let found: Piece | null = null;
+  for (let i = order.length - 1; i >= 0; i--) {
+    const p = order[i];
+    if (p.locked) continue;
+    if (ctx.isPointInPath(p.path, x - p.dx, y - p.dy)) {
+      found = p;
+      break;
+    }
+  }
+  ctx.restore();
+  return found;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
   const rect = canvas.getBoundingClientRect();
-  ripples.push({
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top,
-    born: performance.now(),
-    hue: Math.floor(Math.random() * 360),
-  });
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const p = pickPiece(x, y);
+  if (!p) return;
+  dragging = p;
+  grabDX = x - p.dx;
+  grabDY = y - p.dy;
+  order = order.filter((q) => q !== p);
+  order.push(p);
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const rect = canvas.getBoundingClientRect();
+  dragging.dx = e.clientX - rect.left - grabDX;
+  dragging.dy = e.clientY - rect.top - grabDY;
+});
+
+canvas.addEventListener("pointerup", (e) => {
+  if (!dragging) return;
+  if (Math.hypot(dragging.dx, dragging.dy) < SNAP_DIST) {
+    dragging.dx = 0;
+    dragging.dy = 0;
+    dragging.locked = true;
+  }
+  dragging = null;
+  canvas.releasePointerCapture(e.pointerId);
 });
 
 resizeCanvas();
-window.addEventListener("resize", resizeCanvas);
+buildPuzzle();
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  buildPuzzle();
+});
+requestAnimationFrame(tick);
