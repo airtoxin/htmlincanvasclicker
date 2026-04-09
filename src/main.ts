@@ -237,12 +237,15 @@ canvas.addEventListener("pointerdown", (e) => {
   const y = e.clientY - rect.top;
   const p = pickPiece(x, y);
   if (!p) return;
+  e.preventDefault();
   dragging = p;
   grabDX = x - p.dx;
   grabDY = y - p.dy;
   order = order.filter((q) => q !== p);
   order.push(p);
   canvas.setPointerCapture(e.pointerId);
+  document.body.style.userSelect = "none";
+  if (window.getSelection) window.getSelection()?.removeAllRanges();
 });
 
 canvas.addEventListener("pointermove", (e) => {
@@ -261,6 +264,7 @@ canvas.addEventListener("pointerup", (e) => {
   }
   dragging = null;
   canvas.releasePointerCapture(e.pointerId);
+  document.body.style.userSelect = "";
 });
 
 resizeCanvas();
